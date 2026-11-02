@@ -139,6 +139,8 @@ static bool has_usable_machine(enum place p) {
 }
 
 bool is_profession_needed(enum place prof) {
+	if (factory.busy_places[prof] > 0) return true;
+
 	if (!has_usable_machine(prof)) return false;
 
 	for (int prod = 0; prod < _PRODUCT_COUNT; ++prod) {
@@ -175,7 +177,57 @@ bool is_profession_needed(enum place prof) {
 }
 
 void* worker_routine(void* arg) {
-	(void)arg;
+	worker_t* w = (worker_t*)arg;
+	enum place prof = w->profession;
+	
+	pthread_mutex_lock(&factory.mtx);
+	
+	while (1) {
+		int product = -1;
+		int step = -1;
+	
+		while ( !w->should_end &&
+		        !find_best_work(prof, &product, &step) &&
+		        !(factory.eof_reached && !is_profession_needed(prof)) ) 
+			pthread_cond_wait(&factory.cond, &factory.mtx);
+
+		if (w->should_end) break;
+		if (!find_best_work(prof, &product, &step)) break;
+
+		factory.ready_places[prof]--;
+		factory.busy_places[prof]++;
+
+		factory.parts[product][step]--;
+		factory.in_progress[product][step]++;
+
+		printf("%s %s %s %d\n", w->name, place_str[prof], product_str[product], step + 1);
+		fflush(stdout);
+
+		pthread_mutex_unlock(&factory.mtx);
+		usleep(place_duration_ms[prof] * 1000);
+		pthread_mutex_lock(&factory.mtx);
+
+		factory.busy_places[prof]--;
+		if (factory.remove_pending[prof] > 0) factory.remove_pending[prof]--;
+		else factory.ready_places[prof]++;
+
+		factory.in_progress[product][step]--;
+		if (step + 1 < _PHASE_COUNT) factory.parts[product][step + 1]++;
+		else {	
+			printf("done %s\n", product_str[product]);
+			fflush(stdout);
+		}
+
+		pthread_cond_broadcast(&factory.cond);
+	}
+
+	if (!w->should_end) factory.active_workers[prof]--;
+	printf("%s goes home\n", w->name);
+	fflush(stdout);
+
+	pthread_cond_broadcast(&factory.cond);
+	pthread_mutex_unlock(&factory.mtx);
+
 	return NULL;
 }
 
@@ -289,6 +341,7 @@ int main(int argc, char **argv)
 		}
 		
 		w->should_end = true;
+		factory.active_workers[w->profession]--;
 		pthread_cond_broadcast(&factory.cond);
 		pthread_mutex_unlock(&factory.mtx);
         } else if (strcmp(cmd, "add") == 0 && arg1 && !arg2) {
@@ -337,6 +390,20 @@ int main(int argc, char **argv)
     /* Wait for every worker to finish their work. Nobody should be able to
      * continue.
      */
+	pthread_mutex_lock(&factory.mtx);
+	factory.eof_reached = true;
+	pthread_cond_broadcast(&factory.cond);
+	pthread_mutex_unlock(&factory.mtx);	
+
+	worker_t* curr = factory.workers_head;
+	while (curr != NULL) {
+		worker_t* next = curr->next;
+		pthread_join(curr->thread, NULL);
+		free(curr->name);
+		free(curr);
+		curr = next;
+	}
+
 	pthread_mutex_destroy(&factory.mtx);
 	pthread_cond_destroy(&factory.cond);
 	return 0;

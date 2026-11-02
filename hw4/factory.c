@@ -279,6 +279,18 @@ int main(int argc, char **argv)
              * if the worker is waiting for work
              * you need to wakeup the worker
              */
+
+		pthread_mutex_lock(&factory.mtx);
+		worker_t* w = find_worker(arg1);
+		if (!w) {
+			pthread_mutex_unlock(&factory.mtx);
+			fprintf(stderr, "Error: Worker '%s' not found in 'end' command.\n", arg1);
+			continue;
+		}
+		
+		w->should_end = true;
+		pthread_cond_broadcast(&factory.cond);
+		pthread_mutex_unlock(&factory.mtx);
         } else if (strcmp(cmd, "add") == 0 && arg1 && !arg2) {
             /* add a new place
              *

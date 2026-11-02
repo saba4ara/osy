@@ -173,6 +173,11 @@ bool is_profession_needed(enum place prof) {
 
 }
 
+void* worker_routine(void* arg) {
+	(void)arg;
+	return NULL;
+}
+
 
 
 // MAIN FUNC --------------------------------------------------------
@@ -211,6 +216,46 @@ int main(int argc, char **argv)
              * - workers should have dynamic objects, you don't know
              *   total number of workers
              */
+
+		int place = find_string_in_array(place_str, _PLACE_COUNT, arg2);
+		if (place < 0) {
+			fprintf(stderr, "Error: Unknown workplace '%s' in 'start' command.\n", arg2);
+			continue;
+		}
+
+		worker_t* w = (worker_t*)malloc(sizeof(worker_t));
+		if (!w) {
+			perror("malloc");
+			continue;
+		}
+
+		w->name = strdup(arg1);
+		if (!w->name) {
+			perror("strdup");
+			free(w);
+			continue;
+		}
+
+		w->profession = (enum place)place;
+		w->should_end = false;
+
+		pthread_mutex_lock(&factory.mtx);
+		w->next = factory.workers_head;
+		factory.workers_head = w;
+		factory.active_workers[place]++;
+
+		if (pthread_create(&w->thread, NULL, worker_routine, w) != 0) {
+			perror("pthread_create");
+			factory.workers_head = w->next;
+			factory.active_workers[place]--;
+			pthread_mutex_unlock(&factory.mtx);
+			free(w->name);
+			free(w);
+			continue;
+		}
+
+		pthread_cond_broadcast(&factory.cond);
+		pthread_mutex_unlock(&factory.mtx);
         } else if (strcmp(cmd, "make") == 0 && arg1 && !arg2) {
             int product = find_string_in_array(product_str, _PRODUCT_COUNT, arg1);
 

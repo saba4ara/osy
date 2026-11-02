@@ -7,9 +7,28 @@
 
 #define _PHASE_COUNT 6
 
+
+
+// ENUMS ------------------------------------------------------------
+
 enum place {
     NUZKY, VRTACKA, OHYBACKA, SVARECKA, LAKOVNA, SROUBOVAK, FREZA,
     _PLACE_COUNT
+};
+
+enum product {
+    A, B, C,
+    _PRODUCT_COUNT
+};
+
+
+
+// LOOKUP TABLES ----------------------------------------------------
+
+const enum place product_pipeline[_PRODUCT_COUNT][_PHASE_COUNT] = {
+	[A] = {NUZKY, VRTACKA, OHYBACKA, SVARECKA, VRTACKA, LAKOVNA},
+	[B] = {VRTACKA, NUZKY, FREZA, VRTACKA, LAKOVNA, SROUBOVAK},
+	[C] = {FREZA, VRTACKA, SROUBOVAK, VRTACKA, FREZA, LAKOVNA},
 };
 
 const char *place_str[_PLACE_COUNT] = {
@@ -20,11 +39,6 @@ const char *place_str[_PLACE_COUNT] = {
     [LAKOVNA] = "lakovna",
     [SROUBOVAK] = "sroubovak",
     [FREZA] = "freza",
-};
-
-enum product {
-    A, B, C,
-    _PRODUCT_COUNT
 };
 
 const char *product_str[_PRODUCT_COUNT] = {
@@ -43,11 +57,10 @@ const int place_duration_ms[_PLACE_COUNT] = {
 	[FREZA] = 500,
 };
 
-const enum place product_pipeline[_PRODUCT_COUNT][_PHASE_COUNT] = {
-	[A] = {NUZKY, VRTACKA, OHYBACKA, SVARECKA, VRTACKA, LAKOVNA},
-	[B] = {VRTACKA, NUZKY, FREZA, VRTACKA, LAKOVNA, SROUBOVAK},
-	[C] = {FREZA, VRTACKA, SROUBOVAK, VRTACKA, FREZA, LAKOVNA},
-};
+
+
+// TODO: REASSIGN STRUCTS RESPECTING THE MEMORY PADDING
+// STRUCTS ----------------------------------------------------------
 
 typedef struct worker {
 	char* name;
@@ -61,16 +74,21 @@ typedef struct {
 	pthread_mutex_t mtx;
 	pthread_cond_t cond;
 
+
+	// 2D counters
+	int parts[_PRODUCT_COUNT][_PHASE_COUNT];
+	int in_progress[_PRODUCT_COUNT][_PHASE_COUNT];	
+	
+
+	// 1D counters
 	int ready_places[_PLACE_COUNT];	
 	int busy_places[_PLACE_COUNT];
 	int remove_pending[_PLACE_COUNT];
 
-	int parts[_PRODUCT_COUNT][_PHASE_COUNT];
-	int in_progress[_PRODUCT_COUNT][_PHASE_COUNT];
-
 	int active_workers[_PLACE_COUNT];
-	bool eof_reached;
+	
 
+	bool eof_reached;
 	worker_t *workers_head;
 } factory_t;
 
@@ -78,15 +96,86 @@ static factory_t factory;
 
 
 
+// HELPER FUNCS -----------------------------------------------------
+
 int find_string_in_array(const char **array, int length, char *what)
 {
-    for (int i = 0; i < length; i++)
+    for (int i = 0; i < length; ++i)
         if (strcmp(array[i], what) == 0)
             return i;
     return -1;
 }
 
+worker_t* find_worker(const char* name) {
+	for (worker_t* w = factory.workers_head; w != NULL; w = w->next) {
+		if (!w->should_end && strcmp(w->name, name) == 0) return w;
+	}
+	return NULL;
+}
 
+bool find_best_work(enum place prof, int* out_product, int* out_step) {
+	if (factory.ready_places[prof] <= 0) return false;
+
+	for (int step = _PHASE_COUNT-1; step >= 0; --step) {
+		for (int prod = 0; prod < _PRODUCT_COUNT; ++prod) {
+			if (product_pipeline[prod][step] == prof && 
+			    factory.parts[prod][step] > 0) {
+				*out_product = prod;
+				*out_step = step;
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+static bool has_usable_machine(enum place p) {
+	int total_usable = factory.ready_places[p] + 
+			   factory.busy_places[p] - 
+			   factory.remove_pending[p];
+	return total_usable > 0;
+}
+
+bool is_profession_needed(enum place prof) {
+	if (!has_usable_machine(prof)) return false;
+
+	for (int prod = 0; prod < _PRODUCT_COUNT; ++prod) {
+		for (int target_step = 0; target_step < _PHASE_COUNT; ++target_step) {
+			if (product_pipeline[prod][target_step] != prof) continue;
+
+			if (factory.parts[prod][target_step] > 0) return true;
+
+			for (int s = 0; s < target_step; ++s) {
+				bool waiting_at_s = (factory.parts[prod][s] > 0);
+				bool in_prog_at_s = (factory.in_progress[prod][s] > 0);
+
+				if (!waiting_at_s && !in_prog_at_s) continue;
+
+				int first_check_step = in_prog_at_s ? (s+1) : s;
+				bool path_clear = true;
+
+				for (int k = first_check_step; k < target_step; ++k) {
+					enum place req = product_pipeline[prod][k];
+					if (factory.active_workers[req] <= 0 ||
+					    !has_usable_machine(req)) {
+						path_clear = false;
+						break;
+					}
+				}
+
+				if (path_clear) return true;
+			}
+		}
+	}
+
+	return false;
+
+}
+
+
+
+// MAIN FUNC --------------------------------------------------------
 
 int main(int argc, char **argv)
 {

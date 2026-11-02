@@ -1,10 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <pthread.h>
+#include <unistd.h>
 
-/* You can use these functions and data structures to transform strings to
- * numbers and use them in arrays
- */
+#define _PHASE_COUNT 6
+
 enum place {
     NUZKY, VRTACKA, OHYBACKA, SVARECKA, LAKOVNA, SROUBOVAK, FREZA,
     _PLACE_COUNT
@@ -31,6 +33,51 @@ const char *product_str[_PRODUCT_COUNT] = {
     [C] = "C",
 };
 
+const int place_duration_ms[_PLACE_COUNT] = {
+	[NUZKY] = 100,
+	[VRTACKA] = 200,
+	[OHYBACKA] = 150,
+	[SVARECKA] = 300,
+	[LAKOVNA] = 400,
+	[SROUBOVAK] = 250,
+	[FREZA] = 500,
+};
+
+const enum place product_pipeline[_PRODUCT_COUNT][_PHASE_COUNT] = {
+	[A] = {NUZKY, VRTACKA, OHYBACKA, SVARECKA, VRTACKA, LAKOVNA},
+	[B] = {VRTACKA, NUZKY, FREZA, VRTACKA, LAKOVNA, SROUBOVAK},
+	[C] = {FREZA, VRTACKA, SROUBOVAK, VRTACKA, FREZA, LAKOVNA},
+};
+
+typedef struct worker {
+	char* name;
+	enum place profession;
+	pthread_t thread;
+	bool should_end;
+	struct worker *next;
+} worker_t;
+
+typedef struct {
+	pthread_mutex_t mtx;
+	pthread_cond_t cond;
+
+	int ready_places[_PLACE_COUNT];	
+	int busy_places[_PLACE_COUNT];
+	int remove_pending[_PLACE_COUNT];
+
+	int parts[_PRODUCT_COUNT][_PHASE_COUNT];
+	int in_progress[_PRODUCT_COUNT][_PHASE_COUNT];
+
+	int active_workers[_PLACE_COUNT];
+	bool eof_reached;
+
+	worker_t *workers_head;
+} factory_t;
+
+static factory_t factory;
+
+
+
 int find_string_in_array(const char **array, int length, char *what)
 {
     for (int i = 0; i < length; i++)
@@ -39,23 +86,20 @@ int find_string_in_array(const char **array, int length, char *what)
     return -1;
 }
 
-/* It is not necessary to represent each working place with a dynamically
- * allocated object.  You can store only numbers of ready places.
- *
- * int ready_places[_PLACE_COUNT];
- */
 
-/* It is not necessary to represent each part as a dynamically allocated
- * object.  You can store only a number of parts for each working phase.
- *
- * #define _PHASE_COUNT 6
- * int parts[_PRODUCT_COUNT][_PHASE_COUNT]
- */
 
 int main(int argc, char **argv)
 {
+	(void)argc;
+	(void)argv;
+
     /* Initialize your internal structures, mutexes and condition variables.
      */
+	memset(&factory, 0, sizeof(factory));
+	pthread_mutex_init(&factory.mtx, NULL);
+	pthread_cond_init(&factory.cond, NULL);    
+
+
     char *line = NULL;
     size_t sz = 0;
     while (1) {
@@ -112,5 +156,8 @@ int main(int argc, char **argv)
     /* Wait for every worker to finish their work. Nobody should be able to
      * continue.
      */
+	pthread_mutex_destroy(&factory.mtx);
+	pthread_cond_destroy(&factory.cond);
+	return 0;
 }
 

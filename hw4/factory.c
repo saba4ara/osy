@@ -296,15 +296,44 @@ int main(int argc, char **argv)
              *
              * if worker and part is ready, start working - wakeup the worker
              */
+		int place = find_string_in_array(place_str, _PLACE_COUNT, arg1);
+		if (place < 0) {
+			fprintf(stderr, "Error: Unknown workplace '%s' in 'add' command.\n", arg1);
+			continue;
+		}
+		
+		pthread_mutex_lock(&factory.mtx);
+		factory.ready_places[place]++;
+		pthread_cond_broadcast(&factory.cond);
+		pthread_mutex_unlock(&factory.mtx);
         } else if (strcmp(cmd, "remove") == 0 && arg1 && !arg2) {
             /* If no place is currently idle, queue removal for later.
              * You should not wait here until the place becomes idle.
              */
+		int place = find_string_in_array(place_str, _PLACE_COUNT, arg1);
+		if (place < 0) {
+			fprintf(stderr, "Error: Unknown workplace '%s' in 'remove' command.\n", arg1);
+			continue;
+		}
+
+		pthread_mutex_lock(&factory.mtx);
+		if (!has_usable_machine((enum place)place)) {
+			pthread_mutex_unlock(&factory.mtx);
+			fprintf(stderr, "Error: No available workplace '%s' to remove.\n", arg1);
+			continue;
+		}
+
+		if (factory.ready_places[place] > 0) factory.ready_places[place]--;
+		else factory.remove_pending[place]++;
+
+		pthread_cond_broadcast(&factory.cond);
+		pthread_mutex_unlock(&factory.mtx);
         } else {
-            fprintf(stderr, "Invalid command: %s\n", line);
+            fprintf(stderr, "Error: Invalid command or wrong number of args (cmd: '%s').\n", cmd);
         }
     }
     free(line);
+
     /* Wait for every worker to finish their work. Nobody should be able to
      * continue.
      */

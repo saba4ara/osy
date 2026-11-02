@@ -59,37 +59,38 @@ const int place_duration_ms[_PLACE_COUNT] = {
 
 
 
-// TODO: REASSIGN STRUCTS RESPECTING THE MEMORY PADDING
 // STRUCTS ----------------------------------------------------------
 
 typedef struct worker {
-	char* name;
-	enum place profession;
 	pthread_t thread;
-	bool should_end;
 	struct worker *next;
+	
+	char* name;
+	
+	enum place profession;
+	bool should_end;
 } worker_t;
 
 typedef struct {
-	pthread_mutex_t mtx;
-	pthread_cond_t cond;
-
-
 	// 2D counters
 	int parts[_PRODUCT_COUNT][_PHASE_COUNT];
 	int in_progress[_PRODUCT_COUNT][_PHASE_COUNT];	
-	
 
+	// synch
+	pthread_cond_t cond;
+	pthread_mutex_t mtx;
+	
 	// 1D counters
 	int ready_places[_PLACE_COUNT];	
 	int busy_places[_PLACE_COUNT];
 	int remove_pending[_PLACE_COUNT];
-
 	int active_workers[_PLACE_COUNT];
 	
-
+	// linked list
+	worker_t* workers_head;
+	
+	// bools
 	bool eof_reached;
-	worker_t *workers_head;
 } factory_t;
 
 static factory_t factory;
@@ -193,7 +194,6 @@ int main(int argc, char **argv)
 	pthread_mutex_init(&factory.mtx, NULL);
 	pthread_cond_init(&factory.cond, NULL);    
 
-
     char *line = NULL;
     size_t sz = 0;
     while (1) {
@@ -257,14 +257,20 @@ int main(int argc, char **argv)
 		pthread_cond_broadcast(&factory.cond);
 		pthread_mutex_unlock(&factory.mtx);
         } else if (strcmp(cmd, "make") == 0 && arg1 && !arg2) {
-            int product = find_string_in_array(product_str, _PRODUCT_COUNT, arg1);
-
-            if (product >= 0) {
                 /* add the part to factory cycle */
                 /* you need to wakeup a worker to start working if possible */
-            } else {
-                /* print error */
-            }
+
+            int product = find_string_in_array(product_str, _PRODUCT_COUNT, arg1);
+
+            if (product < 0) {
+		fprintf(stderr, "Error: Unknown product '%s' in 'make' command.\n", arg1);
+		continue;
+	    }
+
+		pthread_mutex_lock(&factory.mtx);
+		factory.parts[product][0]++;
+		pthread_cond_broadcast(&factory.cond);
+		pthread_mutex_unlock(&factory.mtx);
         } else if (strcmp(cmd, "end") == 0 && arg1 && !arg2) {
             /* tell the worker to finish
              * the worker has to finish their work first

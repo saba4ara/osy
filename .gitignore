@@ -1,0 +1,5 @@
+*.o
+factory
+data/
+*.zip
+*.tar
